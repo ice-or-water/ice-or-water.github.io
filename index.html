@@ -1,0 +1,153 @@
+<html>
+<head>
+<title>easydao.cash</title>
+<link rel="icon" href="img/favicon.svg" />
+<script src="b64.js" type="application/javascript"></script>
+<script src="attention.js" type="application/javascript"></script>
+<link rel="stylesheet" href="bulma.min.css">
+<style>
+.attention-component{width:100%;padding:20px;max-width:400px;position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);z-index:10000}.attention-component *{margin:0;padding:0;box-sizing:border-box}.attention-component .inner{border-radius:20px;overflow:hidden;position:relative;box-shadow:0 1px 3px rgba(0,0,0,0.16),0 1px 3px rgba(0,0,0,0.13)}.attention-component .inner-container{padding:20px;background-color:#fff}.attention-component .head{padding:10px 40px 10px 20px;background-color:#000;color:#F8B62D}.attention-component .close{position:absolute;top:10px;right:10px;display:inline-block;margin-bottom:10px;cursor:pointer}.attention-component .close path:first-child{fill:#fff}.attention-component .title{font-size:16px;color:#F8B62D}.attention-component .content{font-size:14px}.attention-component .input{width:100%;border:1px solid #f4f4f4;border-radius:5px;padding:10px 20px;margin-top:20px}.attention-component .input:focus{outline-offset:0;outline:none}.attention-component .button{padding:10px 20px;width:50%;display:block;margin:20px auto 0 auto;border:0;cursor:pointer;border-radius:10px;background-color:#000;color:#F8B62D}.attention-component .buttons{margin-top:20px;text-align:center}.attention-component .cancel,.attention-component .confirm{padding:10px 20px;border:0;border-radius:5px;color:#fff;cursor:pointer}.attention-component .cancel{background-color:#EF767A;margin-right:10px}.attention-component .confirm{background-color:#25B686;margin-left:10px}
+</style>
+<script>
+function parseOptions(text) {
+	if(text.length == 0) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "You did not specify any options!"
+		});
+		return []
+	}
+	var results = []
+	var lines = text.split(/\r?\n/)
+	if(lines.length == 1) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "Please specify two or more options!"
+		});
+		return []
+	}
+	return lines
+}
+
+function parseCoinsAndWeights(text) {
+	if(text.length == 0) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "You did not specify the coins and weights!"
+		});
+		return []
+	}
+	var results = []
+	var lines = text.split(/\r?\n/)
+	for(var i=0; i<lines.length; i++) {
+		var line = lines[i].trim()
+		if(line.length == 0) continue
+		var records = line.split(/\s+/)
+		if(records.length != 2 || records[0].length != 42 || records[0].substr(0,2) != "0x") {
+			window.AlertDlg = new Attention.Alert({
+			    title: "Warning!",
+			    content: "Invalid line "+line
+			});
+			return []
+		}
+		var weight = records[1] * 1.0
+		if(weight <= 0) {
+			window.AlertDlg = new Attention.Alert({
+			    title: "Warning!",
+			    content: "Invalid token weight "+line
+			});
+			return []
+		}
+		results.push([records[0], weight])
+	}
+	return results
+}
+
+async function generateURL() {
+	console.log("0")
+	var startTime = document.getElementById("startTime").value
+	var endTime = document.getElementById("endTime").value
+	console.log(startTime)
+	if(startTime.length == 0) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "You did not specify a start time!"
+		});
+		return
+	}
+	if(endTime.length == 0) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "You did not specify an end time!"
+		});
+		return
+	}
+	console.log("1")
+	var intro = document.getElementById("intro").value
+	if(intro.length == 0) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "You did not write any introduction!"
+		});
+		return
+	}
+	var numSel = Math.floor(document.getElementById("numSel").value)
+	if(numSel < 1) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "Maximum Number of Selected Options Must be NO Less Than 1"
+		});
+		return
+	}
+	console.log("2")
+	var coinsAndWeights = parseCoinsAndWeights(document.getElementById("coinsAndWeights").value)
+	if(coinsAndWeights.length == 0) {
+		return
+	}
+	var options = parseOptions(document.getElementById("options").value.trim())
+	if(options.length == 0) {
+		return
+	}
+	var startTimestamp = Math.floor((new Date(startTime)).getTime()/1000)
+	var endTimestamp = Math.floor((new Date(endTime)).getTime()/1000)
+	var allInfo = [startTimestamp, endTimestamp, intro, coinsAndWeights, options, numSel]
+	console.log(allInfo)
+	var infoArr = strToUTF8Arr(JSON.stringify(allInfo))
+	var infoStr = base64EncArr(infoArr)
+	var hash = buf2hex(await crypto.subtle.digest('SHA-256', infoArr))
+	var resultLink = document.getElementById("resultLink")
+	var url = `https://easydao.cash/vote?h=${hash}&c=${infoStr}`
+	resultLink.href = url
+	resultLink.innerText = url
+}
+
+// XYZ : 0x2021bf6D0C13554E1A1feF1BD0C064315421bDc7
+// ABC : 0xc0Afb01d2C33c8B8c7674E2647D838c12b135F74
+</script>
+</head>
+<body>
+<div style="width: 360px; margin: auto">
+<p style="text-align: center">
+<img src="img/header.svg" width="350"/>
+</p>
+<p style="font-size: 1px">&nbsp;</p>
+<p>Easydao.cash provides a simple on-chain voting method. It has three advantages: 1) your coins are not locked during the voting process; 2) if you deposit your coins into DEX to provide liquidity, the LP tokens can still be used for voting; 3) it consumes less gas because it only requires solidity events to work and does not change any contracts' state.</p>
+<p>Here you can describe a poll and generate a link for holders to vote.</p>
+<table>
+	<tr><td>Start:&nbsp;&nbsp;</td><td><input class="input is-small" id="startTime" type="datetime-local"></td></tr>
+	<tr><td>End:</td><td><input class="input is-small" id="endTime" type="datetime-local"></td></tr>
+</table>
+<p>Introduction:<br>
+<textarea id="intro" cols="45" rows="5" class="textarea is-small" placeholder="Please describe this poll in detail"></textarea></p>
+<p>Options:<br>
+<textarea id="options" cols="45" rows="5" class="textarea is-small" placeholder="Please list the options (one option in a line)"></textarea></p>
+<p>Maximum Number of Selected Options: 
+<input id="numSel" type="number" style="outline: 0; border-width: 0 0 1px; width: 40px" value="1"></p>
+<p>Coin Addresses and Weights:<br>
+<textarea id="coinsAndWeights" class="textarea is-small" cols="45" rows="5" placeholder="In each line, please enter a token's address and its weight number. The original token's weight should be 1, and a LP token's weight must reflect how much original token it corresponds to."></textarea></p>
+<br>
+<center><button class="button" role="button" style="width: 220px; background-color: #F8B62D;" onclick="generateURL()">Generate a Link for Voting</button></center>
+<p>The generated link is:<br>
+<a id="resultLink" target="_blank" style="word-break: break-all;">[Not Generated]</a></p>
+</body>
+</html>

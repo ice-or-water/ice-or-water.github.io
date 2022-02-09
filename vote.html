@@ -1,0 +1,379 @@
+<html>
+<head>
+<title>easydao.cash</title>
+<link rel="icon" href="img/favicon.svg" />
+<script src="ethers-5.5.2.umd.min.js" type="application/javascript"></script>
+<script src="b64.js" type="application/javascript"></script>
+<script src="attention.js" type="application/javascript"></script>
+<link rel="stylesheet" href="bulma.min.css">
+<style>
+.attention-component{width:100%;padding:20px;max-width:400px;position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);z-index:10000}.attention-component *{margin:0;padding:0;box-sizing:border-box}.attention-component .inner{border-radius:20px;overflow:hidden;position:relative;box-shadow:0 1px 3px rgba(0,0,0,0.16),0 1px 3px rgba(0,0,0,0.13)}.attention-component .inner-container{padding:20px;background-color:#fff}.attention-component .head{padding:10px 40px 10px 20px;background-color:#000;color:#F8B62D}.attention-component .close{position:absolute;top:10px;right:10px;display:inline-block;margin-bottom:10px;cursor:pointer}.attention-component .close path:first-child{fill:#fff}.attention-component .title{font-size:16px;color:#F8B62D}.attention-component .content{font-size:14px}.attention-component .input{width:100%;border:1px solid #f4f4f4;border-radius:5px;padding:10px 20px;margin-top:20px}.attention-component .input:focus{outline-offset:0;outline:none}.attention-component .button{padding:10px 20px;width:50%;display:block;margin:20px auto 0 auto;border:0;cursor:pointer;border-radius:10px;background-color:#000;color:#F8B62D}.attention-component .buttons{margin-top:20px;text-align:center}.attention-component .cancel,.attention-component .confirm{padding:10px 20px;border:0;border-radius:5px;color:#fff;cursor:pointer}.attention-component .cancel{background-color:#EF767A;margin-right:10px}.attention-component .confirm{background-color:#25B686;margin-left:10px}
+</style>
+</head>
+<body>
+<div style="width: 400px; margin: auto">
+<p style="text-align: center">
+<img src="img/header.svg" width="350"/>
+</p>
+<p style="font-size: 1px">&nbsp;</p>
+<p>Here is the poll's information:</p>
+<table>
+	<tr><td>Start:&nbsp;&nbsp;</td><td id="startTime"></td></tr>
+	<tr><td>End:</td><td id="endTime"></td></tr>
+</table>
+<p>Status: <b id="status"></b></p>
+<p>Introduction:<br>
+<textarea id="intro" class="textarea is-small" cols="45" rows="5" readonly></textarea></p>
+<p>Coin Addresses and Weights:<br>
+<textarea id="coinsAndWeights" class="textarea is-small" cols="45" rows="5" readonly></textarea></p>
+
+<form id="optionForm">
+<p>Please select at most <span id="numSel"></span> options:</p>
+</form>
+
+<table style="margin: auto">
+<tr><td><button class="button" role="button" style="width: 120px; background-color: #F8B62D;" id="vote">Vote</button>&nbsp;&nbsp;</td>
+<td><button class="button" role="button" style="width: 120px; background-color: #F8B62D;" id="queryResult">Query Result</button></td></tr>
+</table>
+<br>
+<div id="queryProc"></div>
+	<!--
+	<center><br><button class="button is-primary" onclick="deploy()">Deploy</button></center>
+	-->
+</div>
+<script>
+const EasyDaoAddress = "0xBB07cF35Fc46B255f41289c09EF4d92040B2109b"
+const EasyDaoABI = [
+"function vote(uint voteID, uint option, address[] calldata coinTypeList) external",
+"function getCoinTypeAndAmountList(address[] calldata coinTypeList) public view returns (uint[] memory)",
+]
+const SEP20ABI = [
+    "function decimals() view returns (uint8)",
+]
+const Vote = ethers.utils.id("Vote(address,uint256,uint256,uint256,uint256[])")
+const Transfer = ethers.utils.id("Transfer(address,address,uint256)")
+//event Vote(address indexed voter, uint indexed voteID, uint timestamp, uint option, uint[] coinTypeAndAmountList);
+
+function voteFromLog(log, decimalsMap) {
+	const height = log.blockNumber
+	const voter32 = log.topics[1]
+	const voter = ethers.utils.getAddress("0x"+voter32.substr(2+(256-160)/4))
+	const timestamp = ethers.BigNumber.from(log.data.substr(0, 2+64)).toNumber()
+	var optionBN = ethers.BigNumber.from("0x"+log.data.substr(2+64, 64))
+	var optionSet = new Set()
+	for(var i=0; i<ParseResult.numSel; i++) {
+		optionSet.add(optionBN.mod(256).toNumber())
+		optionBN = optionBN.div(256)
+	}
+	const options = Array.from(optionSet)
+	const coinTypeAndAmountListHex = log.data.substr(2+64+64+64*2)
+	var coinAddr2Amt = new Map()
+	for(var start=0; start<coinTypeAndAmountListHex.length; start+=64) {
+		const coinAddr = ethers.utils.getAddress("0x"+coinTypeAndAmountListHex.substr(start, 160/4))
+		if(!decimalsMap.has(coinAddr)) continue
+		const amount = ethers.BigNumber.from("0x"+coinTypeAndAmountListHex.substr(start+160/4, 96/4))
+		coinAddr2Amt.set(coinAddr, amount)
+	}
+	return {voter, height, timestamp, options, coinAddr2Amt}
+}
+
+async function getVotes(provider, filter, decimalsMap) {
+	filter.address = EasyDaoAddress
+	filter.topics = [Vote, null, "0x"+VoteID]
+	const logs = await provider.getLogs(filter)
+	var voteMap = new Map()
+	console.log("logs", logs)
+	for(var i=0; i<logs.length; i++) {
+		var vote = voteFromLog(logs[i], decimalsMap)
+		console.log("vote", vote)
+		if(vote.timestamp < ParseResult.startTime || ParseResult.endTime < vote.timestamp) {
+			continue
+		}
+		voteMap.set(vote.voter, vote)
+	}
+	return voteMap
+}
+
+async function reduceVotingPower(provider, filter, voteMap) {
+	var voters = []
+	for(const voter of voteMap.keys()) {
+		voters.push(ethers.utils.hexZeroPad(voter, 32))
+	}
+	for(var i=0; i<ParseResult.coinsAndWeights.length; i++) {
+		filter.address = ParseResult.coinsAndWeights[i][0]
+		filter.topics = [Transfer, voters]
+		console.log("filter", filter)
+		const logs = await provider.getLogs(filter)
+		for(var i=0; i<logs.length; i++) {
+			const voter = logs[i].topics[1]
+			const delta = ethers.BigNumber.from(logs[i].data)
+			var vote = voteMap.get(voter)
+			if(!vote || vote.height > logs[i].blockNumber) continue
+			var amt = vote.coinAddr2Amt.get(filter.address)
+			if(!amt) {
+				console.log("BUG HERE: No vote info for "+filter.address)
+				continue
+			}
+			if(amt.gt(delta)) {
+				amt = amt.sub(delta)
+			} else {
+				amt = ethers.BigNumber.from(0)
+			}
+			vote.coinAddr2Amt.set(filter.address, amt)
+		}
+	}
+}
+
+document.getElementById("queryResult").addEventListener("click", async function(event) {
+	const provider = new ethers.providers.Web3Provider(window.ethereum)
+	var filter = {}
+	if(Date.now() < ParseResult.endTime*1000) {
+		filter.toBlock = await provider.getBlockNumber()
+	} else {
+		filter.toBlock = await getBlockNumberNearTimestamp(ParseResult.endTime, true)
+		console.log("toblock", filter.toBlock)
+	}
+	filter.fromBlock = await getBlockNumberNearTimestamp(ParseResult.startTime, false)
+	console.log("fromblock", filter.fromBlock)
+	var decimalsMap = await getDecimalsMap(provider)
+	var voteMap = await getVotes(provider, filter, decimalsMap)
+	var queryProc = document.getElementById("queryProc")
+	for(const [voter, vote] of voteMap.entries()) {
+		queryProc.innerHTML += voter+": "+vote.options.join(",")+"<br>"
+	}
+	reduceVotingPower(provider, filter, voteMap)
+
+	var coinAddr2Weight = new Map()
+	for(var i=0; i<ParseResult.coinsAndWeights.length; i++) {
+		console.log("coinAddr2Weight", ParseResult.coinsAndWeights[i][0], ParseResult.coinsAndWeights[i][1]*1.0)
+		coinAddr2Weight.set(ParseResult.coinsAndWeights[i][0], ParseResult.coinsAndWeights[i][1]*1.0)
+	}
+
+	var option2Power = new Map()
+	for(const vote of voteMap.values()) {
+		for(var i=0; i<vote.options.length; i++) {
+			if(!option2Power.has(vote.option)) {
+				option2Power.set(vote.options[i], 0)
+			}
+		}
+		for(const [coinAddr, amount] of vote.coinAddr2Amt.entries()) {
+			const weight = coinAddr2Weight.get(coinAddr)
+			const decimals = decimalsMap.get(coinAddr)
+			const power = ethers.utils.formatUnits(amount, decimals)*weight
+			console.log("why", vote.options, coinAddr, weight, decimals, power)
+			for(var i=0; i<vote.options.length; i++) {
+				option2Power.set(vote.options[i], option2Power.get(vote.options[i])+power)
+			}
+		}
+	}
+	var results = []
+	var totalPower = 0
+	for(const [option, power] of option2Power.entries()) {
+		results.push({option, power})
+		totalPower += power
+	}
+	results.sort(function(a, b) {a.power-b.power})
+	queryProc.innerHTML += "<b>Summary:</b><br>"
+	for(var i=0; i<results.length; i++) {
+		var percent = (results[i].power*100/totalPower).toFixed(2)
+		queryProc.innerHTML += ParseResult.options[results[i].option-1]+": "
+		queryProc.innerHTML += percent+"% "+results[i].power+"<br>"
+	}
+});
+
+async function getDecimalsMap(provider) {
+	var decimalsMap = new Map()
+	for(var i=0; i<ParseResult.coinsAndWeights.length; i++) {
+		const coinAddress = ParseResult.coinsAndWeights[i][0]
+		const sep20Contract = new ethers.Contract(coinAddress, SEP20ABI, provider)
+		const decimals = await sep20Contract.decimals()
+		decimalsMap.set(coinAddress, decimals)
+	}
+	return decimalsMap
+}
+
+async function getBlockNumberNearTimestamp(timestamp, blockIsLater) {
+	const provider = new ethers.providers.Web3Provider(window.ethereum)
+	const latestHeight = await provider.getBlockNumber()
+	const currBlk = await provider.getBlock(latestHeight)
+	if(timestamp > currBlk.timestamp) {
+		return -1
+	}
+	const tenKiloEarlyBlk = await provider.getBlock(latestHeight-10000)
+	const interval = (currBlk.timestamp-tenKiloEarlyBlk.timestamp)/10000.0
+	var height = Math.floor(latestHeight - (currBlk.timestamp-timestamp)/interval)
+	while(1) {
+		var blk = await provider.getBlock(height)
+		console.log("how height ", height, " timestamp ", blk.timestamp)
+		if(blockIsLater) {
+			if(timestamp <= blk.timestamp && blk.timestamp < timestamp+60) {
+				console.log("blockIsLater", timestamp, blk.timestamp)
+				return height
+			}
+		} else {
+			if(timestamp-60 < blk.timestamp && blk.timestamp <= timestamp) {
+				console.log("NOT blockIsLater", blk.timestamp, timestamp)
+				return height
+			}
+		}
+		if(timestamp < blk.timestamp) {
+			height -= Math.floor((blk.timestamp - timestamp)/interval) + 10
+		}
+		if(blk.timestamp < timestamp) {
+			height += Math.floor((timestamp - blk.timestamp)/interval) + 10
+		}
+	}
+}
+
+function timestamp2string(timestamp) {
+	var t = new Date()
+	t.setTime(timestamp*1000)
+	var s = t.toLocaleString("en-US", {hour12: false})
+	return s.slice(0, s.length-3)
+}
+
+async function init() {
+	const url = new URL(window.location)
+	window.VoteID = url.searchParams.get("h")
+	const contentB64 = url.searchParams.get("c")
+	if(!window.VoteID || !contentB64) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "Invalid URL!"
+		});
+		return
+	}
+	const contentArr = base64DecToArr(contentB64)
+	const hash = await crypto.subtle.digest('SHA-256', contentArr)
+	if(window.VoteID != buf2hex(hash)) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "Incorrect Search Parameter!"
+		});
+		return
+	}
+	const contentStr = UTF8ArrToStr(contentArr)
+	console.log(contentStr, JSON.parse(contentStr))
+	const [startTime, endTime, intro, coinsAndWeights, options, numSel] = JSON.parse(contentStr)
+	window.ParseResult = {startTime, endTime, intro, coinsAndWeights, options, numSel}
+	document.getElementById("startTime").innerText = timestamp2string(startTime)
+	document.getElementById("endTime").innerText = timestamp2string(endTime)
+	document.getElementById("intro").innerText = intro
+	var txt = ""
+	for(var i=0; i<coinsAndWeights.length; i++) {
+		txt += coinsAndWeights[i][0] + " " +coinsAndWeights[i][1] + "\n"
+	}
+	document.getElementById("coinsAndWeights").value = txt
+
+	console.log("HHH", Date.now(), endTime*1000)
+	var disabled = ""
+	if(Date.now() < startTime*1000) {
+		document.getElementById("vote").style.display = "none"
+		document.getElementById("queryResult").style.display = "none"
+		disabled = "disabled"
+		document.getElementById("status").innerText = "Not Started"
+	} else if(Date.now() > endTime*1000) {
+		document.getElementById("vote").style.display = "none"
+		disabled = "disabled"
+		document.getElementById("status").innerText = "Ended"
+	} else {
+		document.getElementById("status").innerText = "Voting"
+	}
+	document.getElementById("numSel").innerText = numSel
+	var optHtml = ""
+	for(var i=0; i<options.length; i++) {
+		var inputType = (numSel == 1) ? "radio" : "checkbox"
+		optHtml += `<input type="${inputType}" id="opt${i+1}" name="opt" ${disabled}>`
+		optHtml += `<label for="opt${i+1}">${i+1}. ${options[i]}</label><br>`
+	}
+	document.getElementById("optionForm").innerHTML += optHtml
+}
+
+document.getElementById("vote").addEventListener("click", async function(event) {
+	event.stopPropagation() //document cannot get this event
+	if(ParseResult.endTime*1000 < Date.now()) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "It has been too late to vote!"
+		});
+		return
+	}
+	const provider = new ethers.providers.Web3Provider(window.ethereum)
+	var selectedOpts = []
+	for(var i=1; i<=ParseResult.options.length; i++) {
+		if(document.getElementById("opt"+i).checked) {
+			selectedOpts.push(i)
+		}
+	}
+	console.log("selectedOpts", selectedOpts)
+	if(selectedOpts.length == 0) {
+		console.log("!selectedOpts", selectedOpts)
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "You do not select any options!"
+		});
+		console.log("!selectedOpts", selectedOpts)
+		return
+	}
+	if(selectedOpts.length > ParseResult.numSel) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "Please select at most "+ParseResult.numSel+" options!"
+		});
+		return
+	}
+	var selectedOptsHex = ethers.utils.hexlify(Uint8Array.from(selectedOpts))
+	var coins = []
+	for(var i=0; i<ParseResult.coinsAndWeights.length; i++) {
+		coins.push(ParseResult.coinsAndWeights[i][0])
+	}
+	console.log("coins", coins)
+	const signer = provider.getSigner()
+	const daoContract = new ethers.Contract(EasyDaoAddress, EasyDaoABI, provider).connect(signer)
+	const coinTypeAndAmountList = await daoContract.getCoinTypeAndAmountList(coins)
+	console.log("coinTypeAndAmountList", coinTypeAndAmountList)			   
+	var usefulCoins = []
+	const twoPow96 = ethers.BigNumber.from(2).pow(96)
+	for(var i=0; i<coins.length; i++) {
+		if(coinTypeAndAmountList[i].mod(twoPow96).isZero()) continue
+		usefulCoins.push(coins[i])
+	}
+	if(usefulCoins.length == 0) {
+		window.AlertDlg = new Attention.Alert({
+		    title: "Warning!",
+		    content: "You have none of the assets which can vote in this poll."
+		});
+		return
+	}
+	console.log("selectedOptsHex", selectedOptsHex)
+	daoContract.vote("0x"+window.VoteID, selectedOptsHex, usefulCoins)
+});
+
+async function deploy() {
+  const abi = [ "constructor() public" ];
+  const bytecode = "0x608060405234801561001057600080fd5b50610465806100206000396000f3fe608060405234801561001057600080fd5b50600436106100365760003560e01c8063090081ae1461003b578063133946b414610050575b600080fd5b61004e610049366004610266565b610079565b005b61006361005e3660046102b9565b6100d4565b6040516100709190610336565b60405180910390f35b600061008583836100d4565b905084336001600160a01b03167f857406fac6cde946d0397684cb8aa62b01985df24bff5970e49ab347c7e5f1e54287856040516100c593929190610350565b60405180910390a35050505050565b606060008267ffffffffffffffff8111156100f1576100f1610378565b60405190808252806020026020018201604052801561011a578160200160208202803683370190505b50905060005b815181101561021257600085858381811061013d5761013d61038e565b905060200201602081019061015291906103a4565b6040516370a0823160e01b81523360048201529091506000906001600160a01b038316906370a0823190602401602060405180830381865afa15801561019c573d6000803e3d6000fd5b505050506040513d601f19601f820116820180604052508101906101c091906103cd565b90506101df816bffffffffffffffffffffffff19606085901b166103fc565b8484815181106101f1576101f161038e565b6020026020010181815250505050808061020a90610414565b915050610120565b509392505050565b60008083601f84011261022c57600080fd5b50813567ffffffffffffffff81111561024457600080fd5b6020830191508360208260051b850101111561025f57600080fd5b9250929050565b6000806000806060858703121561027c57600080fd5b8435935060208501359250604085013567ffffffffffffffff8111156102a157600080fd5b6102ad8782880161021a565b95989497509550505050565b600080602083850312156102cc57600080fd5b823567ffffffffffffffff8111156102e357600080fd5b6102ef8582860161021a565b90969095509350505050565b600081518084526020808501945080840160005b8381101561032b5781518752958201959082019060010161030f565b509495945050505050565b60208152600061034960208301846102fb565b9392505050565b83815282602082015260606040820152600061036f60608301846102fb565b95945050505050565b634e487b7160e01b600052604160045260246000fd5b634e487b7160e01b600052603260045260246000fd5b6000602082840312156103b657600080fd5b81356001600160a01b038116811461034957600080fd5b6000602082840312156103df57600080fd5b5051919050565b634e487b7160e01b600052601160045260246000fd5b6000821982111561040f5761040f6103e6565b500190565b6000600019821415610428576104286103e6565b506001019056fea2646970667358221220075c14d9fd0943e6017f1a1f74631d5b56aba3b0f006e012169cd85a4b6546a664736f6c634300080a0033"
+  
+  const provider = new ethers.providers.Web3Provider(window.ethereum)
+  try {
+    const signer = provider.getSigner()
+    const factory = new ethers.ContractFactory(abi, bytecode, signer)
+    const contract = await factory.deploy();
+    console.log("address:", contract.address)
+    const receipt = await contract.deployTransaction.wait();
+    console.log(receipt)
+  } catch(e) {
+    alert("Error! "+e.toString())
+  }
+}
+
+window.onload = init;
+
+document.onclick = function() {
+	if(window.AlertDlg) {
+		window.AlertDlg.destroy();
+		delete window.AlertDlg;
+	}
+}
+</script>
+</body>
+</html>
